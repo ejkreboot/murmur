@@ -9,9 +9,6 @@ ButtonManager::ButtonManager(uint8_t pinNext, uint8_t pinPrev,
   _vup   = { pinVup,   HIGH, HIGH, 0, false };
   _vdown = { pinVdown, HIGH, HIGH, 0, false };
   _play  = { pinPlay,  HIGH, HIGH, 0, false };
-
-  _nonPlay[0] = &_vup;
-  _nonPlay[1] = &_vdown;
 }
 
 void ButtonManager::begin() {
@@ -56,18 +53,6 @@ void ButtonManager::_pollEdges(Button& b, bool& fell, bool& rose) {
   }
 }
 
-// ── _cancelPlay ───────────────────────────────────────────────────────────────
-// Called whenever a non-play button event fires.  Cancels any pending play
-// single-tap whose timestamp falls within PLAY_PRIORITY_MS of 'now', and
-// records the time so that a play tap armed shortly after is also suppressed.
-void ButtonManager::_cancelPlay(uint32_t now) {
-  if (_pendingPlayTapAt != 0 &&
-      (uint32_t)abs((int32_t)(now - _pendingPlayTapAt)) <= PLAY_PRIORITY_MS) {
-    _pendingPlayTapAt = 0;
-  }
-  _lastNonPlayAt = now;
-}
-
 // ── poll ──────────────────────────────────────────────────────────────────────
 void ButtonManager::poll() {
   uint32_t now = millis();
@@ -89,33 +74,22 @@ void ButtonManager::poll() {
     uint32_t held = now - _playHoldStart;
     if (held >= PLAY_HOLD_MS) {
       _sleepRequested   = true;
-      _pendingPlayTapAt = 0;  // cancel any pending single-tap
+      _pendingPlayTapAt = 0;
     } else {
-      // Check for double-tap: second tap within DOUBLE_TAP_MS of the first
+      // Double-tap: second tap within DOUBLE_TAP_MS of the first
       if (_pendingPlayTapAt != 0 && (now - _pendingPlayTapAt) <= DOUBLE_TAP_MS) {
         _playDoubleTapped = true;
         _pendingPlayTapAt = 0;
       } else {
-        // Non-play buttons take priority: suppress the tap if one fired recently
-        if (_lastNonPlayAt == 0 || (now - _lastNonPlayAt) > PLAY_PRIORITY_MS) {
-          _pendingPlayTapAt = now;  // arm deferred single-tap timer
-        }
+        _pendingPlayTapAt = now;  // arm deferred single-tap timer
       }
     }
   }
 
   // Deferred single-tap: fire once the double-tap window has elapsed.
-  // Also cancel if a non-play event landed close to the original tap.
   if (_pendingPlayTapAt != 0 && (now - _pendingPlayTapAt) > DOUBLE_TAP_MS) {
-    bool nonPlayNear = (_lastNonPlayAt != 0) &&
-                       ((uint32_t)abs((int32_t)(_lastNonPlayAt - _pendingPlayTapAt))
-                        <= PLAY_PRIORITY_MS);
-    if (nonPlayNear) {
-      _pendingPlayTapAt = 0;  // non-play wins — discard the tap
-    } else {
-      _play.pressed    = true;
-      _pendingPlayTapAt = 0;
-    }
+    _play.pressed     = true;
+    _pendingPlayTapAt = 0;
   }
 
   // ── Prev button (hold-aware: short press → prev, long press → prevHeld) ────
@@ -127,12 +101,10 @@ void ButtonManager::poll() {
   if (!_prevHoldFired && _prevHoldStart != 0 && _prev.lastState == LOW
       && (now - _prevHoldStart) >= PREV_HOLD_MS) {
     _prevHeld      = true;
-    _prevHoldFired = true;   // fire once per hold; suppress rose-based press
-    _cancelPlay(now);
+    _prevHoldFired = true;
   }
   if (rose && !_prevHoldFired) {
-    _prev.pressed = true;    // short press: deliver on release
-    _cancelPlay(now);
+    _prev.pressed = true;
   }
   if (rose) {
     _prevHoldStart = 0;
@@ -148,22 +120,41 @@ void ButtonManager::poll() {
       && (now - _nextHoldStart) >= NEXT_HOLD_MS) {
     _nextHeld      = true;
     _nextHoldFired = true;
-    _cancelPlay(now);
   }
   if (rose && !_nextHoldFired) {
-    _next.pressed = true;    // short press: deliver on release
-    _cancelPlay(now);
+    _next.pressed = true;
   }
   if (rose) {
     _nextHoldStart = 0;
   }
 
-  // ── Non-play buttons (vup, vdown): fire immediately on press ──────────────
-  for (Button* b : _nonPlay) {
-    _pollEdges(*b, fell, rose);  // clears b->pressed, updates debounce state
-    if (fell) {
-      b->pressed = true;
-      _cancelPlay(now);
-    }
+  // ── Volume Up (immediate on press + auto-repeat while held) ────────────────
+  _pollEdges(_vup, fell, rose);
+  if (fell) {
+    _vup.pressed  = true;            // fire immediately on press
+    _vupHoldStart = now;
+    _vupRepeatAt  = now + VOL_INITIAL_DELAY_MS;
+  }
+  if (_vupHoldStart != 0 && _vup.lastState == LOW && now >= _vupRepeatAt) {
+    _vup.pressed = true;             // auto-repeat step
+    _vupRepeatAt = now + VOL_REPEAT_MS;
+  }
+  if (rose) {
+    _vupHoldStart = 0;
+  }
+
+  // ── Volume Down (immediate on press + auto-repeat while held) ──────────────
+  _pollEdges(_vdown, fell, rose);
+  if (fell) {
+    _vdown.pressed  = true;
+    _vdownHoldStart = now;
+    _vdownRepeatAt  = now + VOL_INITIAL_DELAY_MS;
+  }
+  if (_vdownHoldStart != 0 && _vdown.lastState == LOW && now >= _vdownRepeatAt) {
+    _vdown.pressed = true;
+    _vdownRepeatAt = now + VOL_REPEAT_MS;
+  }
+  if (rose) {
+    _vdownHoldStart = 0;
   }
 }

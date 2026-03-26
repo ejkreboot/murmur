@@ -398,44 +398,43 @@ void DisplayManager::showPlaylistMenu(int selectedIndex,
 }
 
 // ── showChapterMenu ──────────────────────────────────────────────────────────
+// Drum-roll / slot-machine picker: selected chapter is large and centered,
+// with smaller previous/next chapters above and below.
 void DisplayManager::showChapterMenu(int selectedIndex,
                                      const std::vector<ChapterInfo>& chapters) {
   _onTrackScreen = false;
   _display.clearDisplay();
-
-  _u8g2.setFont(u8g2_font_helvR08_tr);
   _u8g2.setForegroundColor(SSD1306_WHITE);
 
   // ── Header ────────────────────────────────────────────────────────────────
+  _u8g2.setFont(u8g2_font_helvR08_tr);
   const char* title = "Chapters";
   int16_t titleW = (int16_t)_u8g2.getUTF8Width(title);
   _u8g2.setCursor(((int16_t)_w - titleW) / 2, 9);
   _u8g2.print(title);
   _display.drawFastHLine(0, 11, _w, SSD1306_WHITE);
 
-  // ── Scroll window (4 visible rows, same layout as playlist menu) ──────────
-  int totalItems   = (int)chapters.size();
-  int visibleStart = selectedIndex - 1;
-  if (visibleStart < 0) visibleStart = 0;
-  if (visibleStart > totalItems - 4) visibleStart = max(0, totalItems - 4);
+  int total = (int)chapters.size();
 
-  static constexpr int ROW_Y    = 12;
-  static constexpr int ROW_H    = 13;
-  static constexpr int TEXT_OFF = 10;
+  // ── Previous chapter (small, indented right) ──────────────────────────────
+  if (selectedIndex > 0) {
+    _u8g2.setFont(u8g2_font_helvR08_tr);
+    _u8g2.setCursor(20, 23);
+    _u8g2.print(chapters[selectedIndex - 1].title.c_str());
+  }
 
-  for (int slot = 0; slot < 4; slot++) {
-    int itemIndex = visibleStart + slot;
-    if (itemIndex >= totalItems) break;
+  // ── Selected chapter (large, with caret) ──────────────────────────────────
+  _u8g2.setFont(u8g2_font_helvB14_tr);
+  _u8g2.setCursor(2, 40);
+  _u8g2.print(">");
+  _u8g2.setCursor(16, 40);
+  _u8g2.print(chapters[selectedIndex].title.c_str());
 
-    int16_t ry = ROW_Y + slot * ROW_H;
-
-    if (itemIndex == selectedIndex) {
-      _u8g2.setCursor(2, ry + TEXT_OFF);
-      _u8g2.print('>');
-    }
-
-    _u8g2.setCursor(12, ry + TEXT_OFF);
-    _u8g2.print(chapters[itemIndex].title.c_str());
+  // ── Next chapter (small, indented right) ──────────────────────────────────
+  if (selectedIndex < total - 1) {
+    _u8g2.setFont(u8g2_font_helvR08_tr);
+    _u8g2.setCursor(20, 55);
+    _u8g2.print(chapters[selectedIndex + 1].title.c_str());
   }
 
   _display.display();

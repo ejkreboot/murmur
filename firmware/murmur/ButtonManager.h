@@ -1,12 +1,13 @@
 #pragma once
 #include <Arduino.h>
 
-static constexpr uint32_t DEBOUNCE_MS      = 40;    // debounce filter window
-static constexpr uint32_t PLAY_PRIORITY_MS = 100;   // non-play cancels play/pause within ±100 ms
-static constexpr uint32_t PLAY_HOLD_MS     = 3000;  // hold duration that triggers restart
-static constexpr uint32_t DOUBLE_TAP_MS    = 400;   // window for double-tap detection
-static constexpr uint32_t PREV_HOLD_MS     = 1000;  // prev long-press opens playlist nav
-static constexpr uint32_t NEXT_HOLD_MS     = 1000;  // next long-press opens chapter nav
+static constexpr uint32_t DEBOUNCE_MS           = 25;    // debounce filter window (hardware stable)
+static constexpr uint32_t PLAY_HOLD_MS          = 3000;  // hold duration that triggers sleep
+static constexpr uint32_t DOUBLE_TAP_MS         = 400;   // window for double-tap detection
+static constexpr uint32_t PREV_HOLD_MS          = 1000;  // prev long-press opens playlist nav
+static constexpr uint32_t NEXT_HOLD_MS          = 1000;  // next long-press opens chapter nav
+static constexpr uint32_t VOL_INITIAL_DELAY_MS  = 400;   // delay before volume auto-repeat starts
+static constexpr uint32_t VOL_REPEAT_MS         = 120;   // interval between auto-repeat steps
 
 struct Button {
   uint8_t  pin;
@@ -38,23 +39,26 @@ public:
 private:
   Button _next, _prev, _vup, _vdown, _play;
 
-  uint32_t _lastNonPlayAt     = 0;   // millis() of most recent non-play button event (for priority)
   uint32_t _playHoldStart     = 0;   // millis() of play falling edge (for hold duration)
   bool     _sleepRequested    = false;
   bool     _playDoubleTapped  = false;
   uint32_t _pendingPlayTapAt  = 0;   // millis() of first tap (0 = none pending)
 
-  // Prev button hold tracking (handled outside _nonPlay loop)
-  uint32_t _prevHoldStart     = 0;   // millis() of prev press edge (0 = not held)
-  bool     _prevHoldFired     = false; // true if hold event already fired for current press
-  bool     _prevHeld          = false; // single-shot: long-press event
+  // Prev button hold tracking
+  uint32_t _prevHoldStart     = 0;
+  bool     _prevHoldFired     = false;
+  bool     _prevHeld          = false;
 
-  // Next button hold tracking (mirrors prev)
+  // Next button hold tracking
   uint32_t _nextHoldStart     = 0;
   bool     _nextHoldFired     = false;
   bool     _nextHeld          = false;
 
-  Button* _nonPlay[2];  // convenience pointers: vup, vdown (next & prev handled separately)
+  // Volume button hold-to-repeat tracking
+  uint32_t _vupHoldStart      = 0;   // 0 = not held
+  uint32_t _vupRepeatAt       = 0;   // millis() of next auto-repeat
+  uint32_t _vdownHoldStart    = 0;
+  uint32_t _vdownRepeatAt     = 0;
 
   void _initButton(Button& b);
 

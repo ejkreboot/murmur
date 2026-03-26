@@ -103,13 +103,20 @@ void setup() {
   buttons.begin();
 
   if (!player.begin()) {
-    // Show error on OLED and spin, but keep polling buttons so the user can
-    // insert an SD card and restart by holding the play button.
-    display.showTrack("No tracks", 0, 0, false);
+    // No SD card or no tracks — show message and poll for recovery.
+    display.showTrack("No SD Card", 0, 0, false);
+    uint32_t lastSdPoll = millis();
     while (true) {
       buttons.poll();
       if (buttons.sleepRequested()) {
         ESP.restart();
+      }
+      // Periodically retry SD mount — card may have been inserted.
+      if (millis() - lastSdPoll >= 2000) {
+        lastSdPoll = millis();
+        if (SD.begin(SD_CS, SPI)) {
+          ESP.restart();
+        }
       }
       delay(10);
     }
@@ -179,6 +186,22 @@ void loop() {
   }
 
   player.update();   // feeds audio pipeline
+
+  // ── SD card removal detection ──────────────────────────────────────────────
+  if (player.sdError()) {
+    display.showTrack("SD Removed", 0, 0, false);
+    // Poll for SD reinsertion; allow play-hold restart.
+    while (true) {
+      buttons.poll();
+      if (buttons.sleepRequested()) {
+        ESP.restart();
+      }
+      if (SD.begin(SD_CS, SPI)) {
+        ESP.restart();
+      }
+      delay(500);
+    }
+  }
 
   // Check if playback stopped at end-of-playlist (RepeatMode::OFF)
   if (player.stoppedAtEnd()) {

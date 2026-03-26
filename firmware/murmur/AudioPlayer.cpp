@@ -30,6 +30,19 @@ bool MurmurPlayer::begin() {
 void MurmurPlayer::update() {
   if (!_playing || !_file) return;
 
+  // Periodic SD health check (~every 2 s) to detect card removal without
+  // adding SPI overhead on every audio copy cycle.
+  static uint32_t lastSdCheck = 0;
+  uint32_t now = millis();
+  if (now - lastSdCheck >= 2000) {
+    lastSdCheck = now;
+    if (!SD.exists("/")) {
+      _closeTrack();
+      _sdError = true;
+      return;
+    }
+  }
+
   // Copy a chunk from the open file through the decoder pipeline.
   // copy() returns the number of bytes written; 0 means end-of-file.
   if (_copier.copy() == 0) {
@@ -158,6 +171,12 @@ void MurmurPlayer::setAudioInfo(AudioInfo info) {
 // ── stoppedAtEnd ──────────────────────────────────────────────────────────────
 bool MurmurPlayer::stoppedAtEnd() {
   if (_stoppedAtEnd) { _stoppedAtEnd = false; return true; }
+  return false;
+}
+
+// ── sdError ───────────────────────────────────────────────────────────────────
+bool MurmurPlayer::sdError() {
+  if (_sdError) { _sdError = false; return true; }
   return false;
 }
 

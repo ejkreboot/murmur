@@ -56,6 +56,9 @@ public:
   // Returns true (once) when playback stopped at end-of-playlist in OFF repeat mode.
   bool stoppedAtEnd();
 
+  // Returns true (once) when an SD read error was detected during update().
+  bool sdError();
+
   // Track info
   int           trackCount()    const { return (int)_tracks.size(); }
   int           currentIndex()  const { return _currentIndex; }
@@ -100,6 +103,7 @@ private:
   float      _volumeLevel  = 0.5f;
   bool       _playing      = false;
   bool       _stoppedAtEnd = false;
+  bool       _sdError      = false;
   RepeatMode _repeatMode   = RepeatMode::ALL;
   File       _file;
   AudioInfo  _streamInfo;     // last detected stream properties (sample_rate, channels)
