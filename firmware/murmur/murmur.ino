@@ -52,12 +52,25 @@ static uint32_t lastOrientPollMs    = 0;
 static constexpr uint32_t ORIENT_POLL_MS = 100;  // poll rate while display is off
 // ── Low battery state ─────────────────────────────────────────────────────────────────
 static bool     lowBattery      = false;
-static bool     lowBattCharging = false;
 static int      lastChapterIdx  = -1;            // for detecting chapter boundary crossings
 static uint32_t lastChapterCheckMs = 0;
 static constexpr uint32_t CHAPTER_CHECK_MS = 1000;  // chapter update poll interval
+// ── Deferred NVS writes ─────────────────────────────────────────────────────────────
+static bool     nvsDirtyVolume    = false;
+static bool     nvsDirtyEq        = false;
+static bool     nvsDirtyTimer     = false;
+static bool     nvsDirtyRepeat    = false;
+static bool     nvsDirtyBookmark  = false;
+static uint32_t nvsLastDirtyMs    = 0;            // millis() of last dirty flag set
+static constexpr uint32_t NVS_FLUSH_DELAY_MS = 2000;  // flush after 2 s of quiet
+// ── Display throttle ─────────────────────────────────────────────────────────────────
+static uint32_t lastDisplayMs     = 0;
+static constexpr uint32_t DISPLAY_MIN_MS = 30;    // minimum ms between full redraws
 // ── Helpers ───────────────────────────────────────────────────────────────────
 void refreshTrackDisplay() {
+  uint32_t now = millis();
+  if (now - lastDisplayMs < DISPLAY_MIN_MS) return;  // throttle redraws
+  lastDisplayMs = now;
   String chapterName = player.isAudiobook() ? player.getChapterName() : "";
   display.showTrack(player.currentName(),
                     player.currentIndex(),
@@ -71,17 +84,45 @@ void refreshTrackDisplay() {
 void adjustVolume(float delta) {
   float v = player.getVolume() + delta;
   player.setVolume(v);
-  prefs.putFloat(PREF_VOL, player.getVolume());  // persist immediately
+  nvsDirtyVolume = true;
+  nvsLastDirtyMs = millis();
   display.showVolume(player.getVolume());
 }
 
-// Save audiobook bookmark (current track path + byte offset) to NVS.
+// Mark audiobook bookmark dirty (flushed by nvsFlush).
 void saveBookmark() {
   if (!player.isAudiobook() || !player.isPlaying()) return;
-  String path = player.currentName();
-  size_t pos  = player.getFilePosition();
-  prefs.putString(PREF_BM_PATH, path);
-  prefs.putULong(PREF_BM_POS, (uint32_t)pos);
+  nvsDirtyBookmark = true;
+  nvsLastDirtyMs   = millis();
+}
+
+// Write all dirty NVS values to flash.  Called after a quiet period or
+// before any operation that needs persistence (sleep, shutdown).
+void nvsFlush() {
+  if (nvsDirtyVolume) {
+    prefs.putFloat(PREF_VOL, player.getVolume());
+    nvsDirtyVolume = false;
+  }
+  if (nvsDirtyEq) {
+    prefs.putUChar(PREF_EQ, (uint8_t)eqMode);
+    nvsDirtyEq = false;
+  }
+  if (nvsDirtyTimer) {
+    prefs.putUChar(PREF_TIMER, (uint8_t)timerMode);
+    nvsDirtyTimer = false;
+  }
+  if (nvsDirtyRepeat) {
+    prefs.putUChar(PREF_REPEAT, (uint8_t)repeatMode);
+    nvsDirtyRepeat = false;
+  }
+  if (nvsDirtyBookmark) {
+    if (player.isAudiobook()) {
+      prefs.putString(PREF_BM_PATH, player.currentName());
+      prefs.putULong(PREF_BM_POS, (uint32_t)player.getFilePosition());
+    }
+    nvsDirtyBookmark = false;
+  }
+  nvsLastDirtyMs = 0;
 }
 
 // ── setup ─────────────────────────────────────────────────────────────────────
@@ -162,12 +203,7 @@ void loop() {
   // Audio and SPI are already shut down; just refresh the USB indicator.
   // When LBO goes high the battery has recovered — full restart.
   if (lowBattery) {
-    bool usb = (digitalRead(CHG_USB_DETECT) == HIGH);
-    if (usb != lowBattCharging) {
-      lowBattCharging = usb;
-      display.showLowBattery(lowBattCharging);
-    }
-    if (digitalRead(CHG_LBO) == HIGH) {
+    if (digitalRead(CHG_LBO) == HIGH || digitalRead(CHG_USB_DETECT) == HIGH) {
       ESP.restart();
     }
     delay(50);
@@ -177,11 +213,13 @@ void loop() {
   buttons.poll();
 
   // ── LBO transition: battery just went low ─────────────────────────────────
-  if (digitalRead(CHG_LBO) == LOW) {
-    lowBattery      = true;
-    lowBattCharging = (digitalRead(CHG_USB_DETECT) == HIGH);
+  // Skip if USB is connected — the device can run on USB power while charging.
+  if (digitalRead(CHG_LBO) == LOW && digitalRead(CHG_USB_DETECT) == LOW) {
+    lowBattery = true;
+    saveBookmark();
+    nvsFlush();
     player.shutdown();
-    display.showLowBattery(lowBattCharging);
+    display.showLowBattery(false);
     return;
   }
 
@@ -218,13 +256,16 @@ void loop() {
       }
       timerMode  = TimerMode::OFF;
       timerStartMs = 0;
-      prefs.putUChar(PREF_TIMER, (uint8_t)TimerMode::OFF);
+      nvsDirtyTimer  = true;
+      nvsLastDirtyMs = millis();
     }
   }
 
   // ── Button events ───────────────────────────────────────────────────────────
-  // Double-tap always toggles the settings menu, regardless of current state.
-  if (buttons.doubleTap()) {
+  // Double-tap toggles the settings menu.  play() also fires on the same cycle
+  // (immediate dispatch), so check doubleTap first.
+  bool dblTap = buttons.doubleTap();
+  if (dblTap) {
     if (appState == AppState::PLAYING) {
       appState = AppState::IN_MENU;
       menuItem = 0;
@@ -274,17 +315,20 @@ void loop() {
         case 0:  // EQ: cycle Loud → Bass Boost → Flat → Loud
           eqMode = (EqMode)(((int)eqMode + 1) % 3);
           player.setEQ(eqMode);
-          prefs.putUChar(PREF_EQ, (uint8_t)eqMode);
+          nvsDirtyEq     = true;
+          nvsLastDirtyMs = millis();
           break;
         case 1:  // Timer: cycle Off → 30 min → 60 min → Off
           timerMode = (TimerMode)(((int)timerMode + 1) % 3);
           timerStartMs = (timerMode != TimerMode::OFF) ? millis() : 0;
-          prefs.putUChar(PREF_TIMER, (uint8_t)timerMode);
+          nvsDirtyTimer  = true;
+          nvsLastDirtyMs = millis();
           break;
         case 2:  // Repeat: cycle All → One → Off → All
           repeatMode = (RepeatMode)(((int)repeatMode + 1) % 3);
           player.setRepeatMode(repeatMode);
-          prefs.putUChar(PREF_REPEAT, (uint8_t)repeatMode);
+          nvsDirtyRepeat = true;
+          nvsLastDirtyMs = millis();
           break;
         case 3:  // Exit
           appState = AppState::PLAYING;
@@ -356,7 +400,9 @@ void loop() {
       refreshTrackDisplay();
     }
 
-    if (buttons.play()) {
+    // In PLAYING state, play() fires immediately on tap release.  Skip if
+    // doubleTap already consumed this press (menu toggle takes priority).
+    if (!dblTap && buttons.play()) {
       if (player.isPlaying()) saveBookmark();  // save before pausing
       player.togglePause();
       refreshTrackDisplay();
@@ -364,7 +410,8 @@ void loop() {
   }
 
   if (buttons.sleepRequested()) {
-    saveBookmark();  // persist audiobook position before sleep
+    saveBookmark();  // mark bookmark dirty
+    nvsFlush();      // flush all pending NVS writes before sleep
     // Show farewell message, blank display, then enter deepest sleep that
     // can still be woken by the play button (EXT1 on RTC GPIO, active LOW).
     display.showPowerOff();
@@ -432,5 +479,10 @@ void loop() {
         displaySleeping = false;
       }
     }
+  }
+
+  // ── Deferred NVS flush ─────────────────────────────────────────────────────
+  if (nvsLastDirtyMs != 0 && (millis() - nvsLastDirtyMs) >= NVS_FLUSH_DELAY_MS) {
+    nvsFlush();
   }
 }

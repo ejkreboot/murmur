@@ -175,7 +175,12 @@ void DisplayManager::_redrawTrack() {
     _u8g2.print(bottomLabel.c_str());
   }
 
-  _display.display();
+  // Throttle I2C pushes: skip if too soon since last push.
+  uint32_t now = millis();
+  if (now - _lastRedrawMs >= REDRAW_MIN_MS) {
+    _display.display();
+    _lastRedrawMs = now;
+  }
 }
 
 // ── Icons ─────────────────────────────────────────────────────────────────────

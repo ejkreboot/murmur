@@ -1,14 +1,19 @@
 #include "ButtonManager.h"
 
+// ── ISR trampoline ────────────────────────────────────────────────────────────
+static void IRAM_ATTR timerTrampoline(void* arg) {
+  static_cast<ButtonManager*>(arg)->isrPoll();
+}
+
 ButtonManager::ButtonManager(uint8_t pinNext, uint8_t pinPrev,
                              uint8_t pinVup,  uint8_t pinVdown,
                              uint8_t pinPlay)
 {
-  _next  = { pinNext,  HIGH, HIGH, 0, false };
-  _prev  = { pinPrev,  HIGH, HIGH, 0, false };
-  _vup   = { pinVup,   HIGH, HIGH, 0, false };
-  _vdown = { pinVdown, HIGH, HIGH, 0, false };
-  _play  = { pinPlay,  HIGH, HIGH, 0, false };
+  _next  = { pinNext,  HIGH, 0, HIGH, false, false, HIGH, false };
+  _prev  = { pinPrev,  HIGH, 0, HIGH, false, false, HIGH, false };
+  _vup   = { pinVup,   HIGH, 0, HIGH, false, false, HIGH, false };
+  _vdown = { pinVdown, HIGH, 0, HIGH, false, false, HIGH, false };
+  _play  = { pinPlay,  HIGH, 0, HIGH, false, false, HIGH, false };
 }
 
 void ButtonManager::begin() {
@@ -17,40 +22,64 @@ void ButtonManager::begin() {
   _initButton(_vup);
   _initButton(_vdown);
   _initButton(_play);
+
+  // Start a 1 kHz hardware timer for ISR-based GPIO sampling.
+  esp_timer_create_args_t args = {};
+  args.callback = timerTrampoline;
+  args.arg      = this;
+  args.name     = "btn";
+  esp_timer_create(&args, &_timer);
+  esp_timer_start_periodic(_timer, 1000);  // 1000 µs = 1 kHz
 }
 
 void ButtonManager::_initButton(Button& b) {
   pinMode(b.pin, INPUT_PULLUP);
-  b.lastState    = HIGH;
-  b.currentRaw   = HIGH;
-  b.lastChangeMs = 0;
-  b.pressed      = false;
+  b.isrRaw         = HIGH;
+  b.isrStableCount = DEBOUNCE_SAMPLES;  // start as "stable HIGH"
+  b.isrStable      = HIGH;
+  b.isrFell        = false;
+  b.isrRose        = false;
+  b.lastState      = HIGH;
+  b.pressed        = false;
 }
 
-// ── _pollEdges ────────────────────────────────────────────────────────────────
-// Update debounce state for button b.
-// Sets fell=true on a newly-stable HIGH→LOW transition (press).
-// Sets rose=true on a newly-stable LOW→HIGH transition (release).
-// At most one of fell/rose is true per call.
-void ButtonManager::_pollEdges(Button& b, bool& fell, bool& rose) {
+// ── isrPoll (called at 1 kHz from hardware timer) ─────────────────────────────
+// Debounces all 5 buttons and latches edges.  digitalRead() is safe on ESP32.
+void IRAM_ATTR ButtonManager::isrPoll() {
+  Button* btns[] = { &_next, &_prev, &_vup, &_vdown, &_play };
+  for (int i = 0; i < 5; i++) {
+    Button& b = *btns[i];
+    bool raw = digitalRead(b.pin);
+    if (raw == b.isrRaw) {
+      if (b.isrStableCount < 255) b.isrStableCount++;
+    } else {
+      b.isrRaw = raw;
+      b.isrStableCount = 0;
+    }
+    if (b.isrStableCount == DEBOUNCE_SAMPLES && b.isrRaw != b.isrStable) {
+      if (b.isrRaw == LOW) b.isrFell = true;
+      else                  b.isrRose = true;
+      b.isrStable = b.isrRaw;
+    }
+  }
+}
+
+// ── _consumeEdges ─────────────────────────────────────────────────────────────
+// Atomically consume ISR-latched edges for a single button.
+void ButtonManager::_consumeEdges(Button& b, bool& fell, bool& rose) {
   fell = false;
   rose = false;
-  b.pressed = false;  // clear single-shot flag
+  b.pressed = false;
 
-  bool raw = digitalRead(b.pin);
-  if (raw != b.currentRaw) {
-    b.currentRaw   = raw;
-    b.lastChangeMs = millis();
-  }
+  noInterrupts();
+  fell = b.isrFell;
+  rose = b.isrRose;
+  b.isrFell = false;
+  b.isrRose = false;
+  bool stable = b.isrStable;
+  interrupts();
 
-  if ((millis() - b.lastChangeMs) >= DEBOUNCE_MS) {
-    if (b.lastState == HIGH && b.currentRaw == LOW) {
-      fell = true;
-    } else if (b.lastState == LOW && b.currentRaw == HIGH) {
-      rose = true;
-    }
-    b.lastState = b.currentRaw;
-  }
+  b.lastState = stable;
 }
 
 // ── poll ──────────────────────────────────────────────────────────────────────
@@ -64,7 +93,10 @@ void ButtonManager::poll() {
   bool fell, rose;
 
   // ── Play button ────────────────────────────────────────────────────────────
-  _pollEdges(_play, fell, rose);
+  // Single tap fires immediately on release.  If a second release arrives
+  // within DOUBLE_TAP_MS of the first, doubleTap() also fires (both in the
+  // same poll cycle).
+  _consumeEdges(_play, fell, rose);
 
   if (fell) {
     _playHoldStart = now;
@@ -73,27 +105,20 @@ void ButtonManager::poll() {
   if (rose) {
     uint32_t held = now - _playHoldStart;
     if (held >= PLAY_HOLD_MS) {
-      _sleepRequested   = true;
-      _pendingPlayTapAt = 0;
+      _sleepRequested = true;
     } else {
-      // Double-tap: second tap within DOUBLE_TAP_MS of the first
-      if (_pendingPlayTapAt != 0 && (now - _pendingPlayTapAt) <= DOUBLE_TAP_MS) {
+      _play.pressed = true;   // dispatch immediately
+      if (_lastPlayTapAt != 0 && (now - _lastPlayTapAt) <= DOUBLE_TAP_MS) {
         _playDoubleTapped = true;
-        _pendingPlayTapAt = 0;
+        _lastPlayTapAt    = 0;
       } else {
-        _pendingPlayTapAt = now;  // arm deferred single-tap timer
+        _lastPlayTapAt = now;
       }
     }
   }
 
-  // Deferred single-tap: fire once the double-tap window has elapsed.
-  if (_pendingPlayTapAt != 0 && (now - _pendingPlayTapAt) > DOUBLE_TAP_MS) {
-    _play.pressed     = true;
-    _pendingPlayTapAt = 0;
-  }
-
   // ── Prev button (hold-aware: short press → prev, long press → prevHeld) ────
-  _pollEdges(_prev, fell, rose);
+  _consumeEdges(_prev, fell, rose);
   if (fell) {
     _prevHoldStart = now;
     _prevHoldFired = false;
@@ -111,7 +136,7 @@ void ButtonManager::poll() {
   }
 
   // ── Next button (hold-aware: short press → next, long press → nextHeld) ────
-  _pollEdges(_next, fell, rose);
+  _consumeEdges(_next, fell, rose);
   if (fell) {
     _nextHoldStart = now;
     _nextHoldFired = false;
@@ -129,7 +154,7 @@ void ButtonManager::poll() {
   }
 
   // ── Volume Up (immediate on press + auto-repeat while held) ────────────────
-  _pollEdges(_vup, fell, rose);
+  _consumeEdges(_vup, fell, rose);
   if (fell) {
     _vup.pressed  = true;            // fire immediately on press
     _vupHoldStart = now;
@@ -144,7 +169,7 @@ void ButtonManager::poll() {
   }
 
   // ── Volume Down (immediate on press + auto-repeat while held) ──────────────
-  _pollEdges(_vdown, fell, rose);
+  _consumeEdges(_vdown, fell, rose);
   if (fell) {
     _vdown.pressed  = true;
     _vdownHoldStart = now;

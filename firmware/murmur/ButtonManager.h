@@ -1,9 +1,10 @@
 #pragma once
 #include <Arduino.h>
+#include <esp_timer.h>
 
-static constexpr uint32_t DEBOUNCE_MS           = 25;    // debounce filter window (hardware stable)
+static constexpr uint8_t  DEBOUNCE_SAMPLES      = 25;    // ISR ticks (1 kHz) ≈ 25 ms
 static constexpr uint32_t PLAY_HOLD_MS          = 3000;  // hold duration that triggers sleep
-static constexpr uint32_t DOUBLE_TAP_MS         = 400;   // window for double-tap detection
+static constexpr uint32_t DOUBLE_TAP_MS         = 250;   // window for double-tap detection
 static constexpr uint32_t PREV_HOLD_MS          = 1000;  // prev long-press opens playlist nav
 static constexpr uint32_t NEXT_HOLD_MS          = 1000;  // next long-press opens chapter nav
 static constexpr uint32_t VOL_INITIAL_DELAY_MS  = 400;   // delay before volume auto-repeat starts
@@ -11,9 +12,16 @@ static constexpr uint32_t VOL_REPEAT_MS         = 120;   // interval between aut
 
 struct Button {
   uint8_t  pin;
-  bool     lastState;     // last stable (debounced) state; HIGH = released (pull-up)
-  bool     currentRaw;    // latest raw digitalRead value
-  uint32_t lastChangeMs;  // millis() of last raw edge
+
+  // ISR-maintained debounce state (written only by ISR)
+  volatile bool     isrRaw;          // latest GPIO read
+  volatile uint8_t  isrStableCount;  // consecutive matching samples
+  volatile bool     isrStable;       // debounced stable state
+  volatile bool     isrFell;         // latched HIGH→LOW edge
+  volatile bool     isrRose;         // latched LOW→HIGH edge
+
+  // poll()-maintained
+  bool     lastState;     // last consumed stable state; HIGH = released
   bool     pressed;       // single-shot flag: true for one poll() cycle
 };
 
@@ -26,11 +34,14 @@ public:
   void begin();
   void poll();  // call every loop iteration
 
+  // Called by hardware timer ISR — samples all GPIOs and debounces.
+  void IRAM_ATTR isrPoll();
+
   bool next()             const { return _next.pressed;       }
   bool prev()             const { return _prev.pressed;       }
   bool vup()              const { return _vup.pressed;        }
   bool vdown()            const { return _vdown.pressed;      }
-  bool play()             const { return _play.pressed;       }  // fires on deferred single tap
+  bool play()             const { return _play.pressed;       }  // fires immediately on tap release
   bool doubleTap()        const { return _playDoubleTapped;   }  // fires on second tap within window
   bool sleepRequested()   const { return _sleepRequested;     }
   bool prevHeld()         const { return _prevHeld;           }  // fires once on 1-second hold
@@ -38,11 +49,12 @@ public:
 
 private:
   Button _next, _prev, _vup, _vdown, _play;
+  esp_timer_handle_t _timer = nullptr;
 
   uint32_t _playHoldStart     = 0;   // millis() of play falling edge (for hold duration)
   bool     _sleepRequested    = false;
   bool     _playDoubleTapped  = false;
-  uint32_t _pendingPlayTapAt  = 0;   // millis() of first tap (0 = none pending)
+  uint32_t _lastPlayTapAt     = 0;   // millis() of previous tap (for double-tap detection)
 
   // Prev button hold tracking
   uint32_t _prevHoldStart     = 0;
@@ -62,9 +74,6 @@ private:
 
   void _initButton(Button& b);
 
-  // Update debounce state; returns fall=true on new press edge, rise=true on new release edge.
-  void _pollEdges(Button& b, bool& fell, bool& rose);
-
-  // Cancel pending play tap if it overlaps with a non-play event at 'now'; record _lastNonPlayAt.
-  void _cancelPlay(uint32_t now);
+  // Consume ISR-latched edges for button b into fell/rose.
+  void _consumeEdges(Button& b, bool& fell, bool& rose);
 };

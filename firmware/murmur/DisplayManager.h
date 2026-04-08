@@ -86,6 +86,8 @@ private:
   float    _volume       = 0.5f;
   bool     _onTrackScreen = false;
   bool     _displayOn    = true;
+  uint32_t _lastRedrawMs = 0;        // throttle: millis() of last I2C push
+  static constexpr uint32_t REDRAW_MIN_MS = 30;  // minimum interval between I2C pushes
 
   // ── Scroll state ──────────────────────────────────────────────────────────
   enum ScrollPhase { HOLD_START, SCROLLING, HOLD_END };
