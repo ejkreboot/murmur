@@ -30,42 +30,9 @@ The ESP32-S3 was chosen for its capable USB peripheral support and audio I2S int
 
 ---
 
-## Features
+## User's Manual
 
-- **MP3 playback** from microSD card via 3.5mm headphone jack
-- **OLED display** (SSD1306 128×64) — track info with scrolling title, volume bar, play/pause icon
-- **Audiobook support** — automatic detection via ID3v2 genre tag, chapter navigation (CHAP/CTOC frames), and persistent bookmarks across power cycles
-- **Playlist / folder navigation** — browse and select folders as playlists; "All Songs" mode plays everything
-- **3-band equalizer** — Loud, Bass Boost, and Flat presets
-- **Sleep timer** — 30-minute and 60-minute auto-pause options
-- **Repeat modes** — All, One, Off
-- **Accelerometer sleep/wake** — display turns off when the device is laid flat for 2 seconds; wakes when picked up
-- **Deep sleep** — hold Play for 3 seconds; wakes on Play button press with minimal power draw
-- **Low battery protection** — monitors MCP73871 LBO signal, displays charging status, and auto-recovers
-- **Settings persistence** — volume, EQ, repeat mode, and audiobook bookmarks saved to NVS flash
-
----
-
-## Usage
-
-1. **Load music** — Copy MP3 files to a microSD card. Organize into folders for playlist support.
-2. **Insert card** — Place the microSD card into the Murmur slot.
-3. **Play** — Press the Play button. Murmur begins playback from the first track (or the last audiobook bookmark).
-
-### Button Controls
-
-| Button | Short press | Long press |
-|--------|------------|------------|
-| **Play** | Play / Pause | Hold 3 s → deep sleep |
-| **Play ×2** | Toggle settings menu | — |
-| **Next** | Next track | Chapter menu (audiobooks) |
-| **Prev** | Previous track | Playlist menu |
-| **Vol Up** | Volume up | — |
-| **Vol Down** | Volume down | — |
-
-### Audiobooks
-
-Files whose ID3v2 genre tag contains "Audiobook" are treated as audiobooks. Murmur saves your position automatically when you pause, change playlists, or power off, and resumes where you left off on the next boot. If the file contains CHAP frames, long-press Next to open a chapter navigator.
+For features, usage instructions, button controls, and audiobook support, see the **[Murmur User's Manual](https://ejkreboot.github.io/murmur)**.
 
 ---
 
@@ -73,11 +40,12 @@ Files whose ID3v2 genre tag contains "Audiobook" are treated as audiobooks. Murm
 
 ```
 BOM.csv          — Full bill of materials with JLCPCB part numbers
+docs/            — User's manual and supporting images
 gerbers/         — Fabrication files (Gerber + drill) ready for PCB manufacture
 firmware/murmur/ — Arduino sketch and source for the ESP32-S3
 firmware/tools/  — Utilities (logo bitmap converter)
+images/          — PCB renders, schematics, logos, and 3D model
 Models/          — 3D-printable enclosure and button cap files (.3mf, .step)
-images/          — PCB 3D model, logo source, enclosure STEP file
 ```
 
 ---
