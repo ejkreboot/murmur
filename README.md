@@ -32,7 +32,7 @@ The ESP32-S3 was chosen for its capable USB peripheral support and audio I2S int
 
 ## User's Manual
 
-For features, usage instructions, button controls, and audiobook support, see the **[Murmur User's Manual](https://ejkreboot.github.io/murmur)**.
+For features, usage instructions, button controls, and audiobook support, see the **[Murmur User's Manual](https://ejkreboot.github.io/murmur/murmur_manual.html)**.
 
 ---
 
